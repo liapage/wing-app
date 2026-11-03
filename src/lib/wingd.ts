@@ -32,8 +32,24 @@ export type Me = {
     avatar_url: string;
 };
 
+export type ChatMember = {
+    user: Me;
+    joined_at: string;
+};
+
+export type Chat = {
+    id: string;
+    title: string;
+    created_at: string;
+    members: ChatMember[];
+};
+
 type MeResponse = {
     user: Me;
+};
+
+type ChatsResponse = {
+    chats: Chat[];
 };
 
 type SessionResponse = {
@@ -56,6 +72,16 @@ export class DiscordAuthError extends Error {
         super(code);
         this.name = "DiscordAuthError";
         this.code = code;
+    }
+}
+
+export class WingdApiError extends Error {
+    status: number;
+
+    constructor(path: string, status: number) {
+        super(`${path}: ${status}`);
+        this.name = "WingdApiError";
+        this.status = status;
     }
 }
 
@@ -104,6 +130,27 @@ export async function fetchMe(): Promise<Me | null> {
 
     const body = (await response.json()) as MeResponse;
     return body.user;
+}
+
+export async function fetchChats(): Promise<Chat[]> {
+    const token = await readToken();
+    if (!token) throw new WingdApiError("GET /api/chats/me", 401);
+
+    const response = await fetch(`${apiUrl}/chats/me`, {
+        headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${token}`,
+        },
+    });
+
+    if (response.status === 401) {
+        await clearToken();
+        throw new WingdApiError("GET /api/chats/me", 401);
+    }
+    if (!response.ok) throw new WingdApiError("GET /api/chats/me", response.status);
+
+    const body = (await response.json()) as ChatsResponse;
+    return body.chats ?? [];
 }
 
 function getRedirectUri(): string {

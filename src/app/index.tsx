@@ -1,22 +1,21 @@
 import { Redirect } from "expo-router";
 
-import ChannelRoom from "@/components/ChannelRoom";
+import ChatsScreen from "@/components/ChatsScreen";
 import { useAuth } from "@/auth/AuthProvider";
-import { useTheme } from "@/theme/ThemeProvider";
 import LoadingScreen from "@/components/LoadingScreen";
 
 export default function Index() {
-    const { status } = useAuth();
+    const auth = useAuth();
 
-    if (status === "loading") {
+    if (auth.status === "loading") {
         return (
             <LoadingScreen />
         );
     }
 
-    if (status === "anonymous") {
+    if (auth.status === "anonymous") {
         return <Redirect href="/login" />;
     }
 
-    return <ChannelRoom />;
+    return <ChatsScreen me={auth.me} />;
 }

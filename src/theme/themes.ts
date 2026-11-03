@@ -7,6 +7,7 @@ export type Theme = {
     buttonColor: string;
     buttonDisabledColor: string;
     sendIcon: string;
+    separator: string;
 };
 
 export const lightTheme: Theme = {
@@ -18,6 +19,7 @@ export const lightTheme: Theme = {
     buttonColor: "#000000",
     buttonDisabledColor: "#c7c7cc",
     sendIcon: "#ffffff",
+    separator: "#e5e5ea",
 };
 
 export const darkTheme: Theme = {
@@ -29,4 +31,5 @@ export const darkTheme: Theme = {
     buttonColor: "#ffffff",
     buttonDisabledColor: "#4a4a4a",
     sendIcon: "#000000",
+    separator: "#383838",
 };

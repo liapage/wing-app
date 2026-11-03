@@ -3,13 +3,15 @@ import {
     FlatList,
     KeyboardAvoidingView,
     Platform,
+    Pressable,
     StyleSheet,
     Text,
     View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {useTheme} from "@/theme/ThemeProvider";
-import {Theme} from "@/theme/themes";
+import Avatar from "@/components/Avatar";
+import { useTheme } from "@/theme/ThemeProvider";
+import { Theme } from "@/theme/themes";
 import ChatInput from "@/components/ChatInput";
 
 type Message = {
@@ -18,7 +20,13 @@ type Message = {
     text: string;
 };
 
-export default function ChannelRoom() {
+type ChatRoomProps = {
+    title: string;
+    avatarUrl?: string;
+    onBack?: () => void;
+};
+
+export default function ChatRoom({ title, avatarUrl, onBack }: ChatRoomProps) {
     const {theme} = useTheme();
     const styles = useMemo(() => createStyles(theme), [theme]);
 
@@ -66,6 +74,31 @@ export default function ChannelRoom() {
 
     return (
         <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+            <View style={styles.header}>
+                <View style={styles.headerSide}>
+                    {onBack ? (
+                        <Pressable
+                            onPress={onBack}
+                            hitSlop={10}
+                            style={styles.backButton}
+                            accessibilityRole="button"
+                            accessibilityLabel="Back to chats"
+                        >
+                            <Text style={styles.backIcon}>‹</Text>
+                        </Pressable>
+                    ) : null}
+                </View>
+
+                <View style={styles.headerCenter}>
+                    <Avatar name={title} uri={avatarUrl || undefined} size={30} />
+                    <Text style={styles.headerTitle} numberOfLines={1}>
+                        {title}
+                    </Text>
+                </View>
+
+                <View style={styles.headerSide} />
+            </View>
+
             <KeyboardAvoidingView
                 style={styles.flex}
                 behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -97,6 +130,44 @@ const createStyles = (theme: Theme) =>
         container: {
             flex: 1,
             backgroundColor: theme.background,
+        },
+        header: {
+            flexDirection: "row",
+            alignItems: "center",
+            minHeight: 50,
+            paddingHorizontal: 8,
+            borderBottomWidth: StyleSheet.hairlineWidth,
+            borderBottomColor: theme.separator,
+        },
+        headerSide: {
+            width: 48,
+            alignItems: "flex-start",
+        },
+        backButton: {
+            width: 40,
+            height: 40,
+            alignItems: "center",
+            justifyContent: "center",
+        },
+        backIcon: {
+            marginTop: -3,
+            fontSize: 38,
+            lineHeight: 40,
+            color: theme.text,
+        },
+        headerCenter: {
+            flex: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            minWidth: 0,
+        },
+        headerTitle: {
+            flexShrink: 1,
+            fontSize: 17,
+            fontWeight: "600",
+            color: theme.text,
         },
         list: {
             flexGrow: 1,
