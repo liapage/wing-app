@@ -1,56 +1,37 @@
-# Welcome to your Expo app 👋
+# wing-app
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Expo app for [wingd](../wingd).
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Setup
 
 ```bash
-npm run reset-project
+npm install
+cp .env.example .env.local   # then fill in the Discord client ID
+npx expo start
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+The app reads these variables at build time:
 
-### Other setup steps
+| Variable | Required | Default |
+| --- | --- | --- |
+| `EXPO_PUBLIC_WINGD_URL` | no | `http://localhost:8080` |
+| `EXPO_PUBLIC_DISCORD_CLIENT_ID` | yes | – |
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+`EXPO_PUBLIC_DISCORD_CLIENT_ID` is the numeric **Application ID** from the Discord Developer Portal (not the client secret). Env changes are inlined at bundle time, so restart with `npx expo start --clear` after editing `.env.local`.
 
-## Learn more
+### Discord setup
 
-To learn more about developing your project with Expo, look at the following resources:
+1. In the Discord Developer Portal, open the app and enable **Public Client** under OAuth2.
+2. Add the redirect URI `wing://auth/callback` for native builds.
+3. For web, also add `http://localhost:8081/auth/callback` (or the URL you serve the web build from).
+4. Make sure the same Discord client ID is configured on wingd as `DISCORD_CLIENT_ID`.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Expo Go cannot complete this flow because its redirect URI uses the `exp://` scheme. Use a development build (`npx expo run:ios` / `npx expo run:android`) or a production build.
 
-## Join the community
+The web build also calls wingd from the browser, so wingd must allow that origin through CORS.
 
-Join our community of developers creating universal apps.
+## Auth flow
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+1. The app opens Discord's OAuth2 authorize page with a PKCE challenge (`S256`) and a `state` value.
+2. Discord redirects back to the app with a `code`; the app exchanges it directly with Discord's token endpoint using the PKCE verifier.
+3. The app posts the Discord access token to `POST /api/auth/discord`, stores the returned wingd token in SecureStore (localStorage on web), and uses it as `Authorization: Bearer` for `GET /api/me`.
