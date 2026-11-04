@@ -3,7 +3,6 @@ import {
     ActivityIndicator,
     FlatList,
     KeyboardAvoidingView,
-    Platform,
     Pressable,
     StyleSheet,
     Text,
@@ -264,7 +263,10 @@ export default function ChatRoom({
 
             <KeyboardAvoidingView
                 style={styles.flex}
-                behavior={Platform.OS === "ios" ? "padding" : undefined}
+                // Edge-to-edge is enabled on Android, so the window is not
+                // resized for the IME anymore (`adjustResize` is ignored).
+                // Both platforms need the view to avoid the keyboard itself.
+                behavior="padding"
             >
                 {loading ? (
                     <View style={styles.centered}>
