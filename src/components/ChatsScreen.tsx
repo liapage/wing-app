@@ -15,6 +15,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Avatar from "@/components/Avatar";
 import { useAuth } from "@/auth/AuthProvider";
 import { fetchChats, WingdApiError, type Chat, type Me } from "@/lib/wingd";
+import { markdownToPlainText } from "@/markdown/parse";
+import { useMessagingStore } from "@/messaging/MessagingProvider";
+import type { ChatMessage } from "@/messaging/store";
 import { useTheme } from "@/theme/ThemeProvider";
 import type { Theme } from "@/theme/themes";
 
@@ -41,6 +44,13 @@ function chatPreview(chat: Chat): string {
     const count = Math.max(chat.members?.length ?? 0, 1);
 
     return count > 2 ? `${count} people` : "No messages yet";
+}
+
+function lastMessagePreview(message: ChatMessage, meId: string): string {
+    const text = markdownToPlainText(message.text);
+    if (!text) return "New message";
+
+    return message.sender_id === meId ? `You: ${text}` : text;
 }
 
 function formatChatTime(value: string): string {
@@ -76,6 +86,7 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
     const { theme } = useTheme();
     const styles = useMemo(() => createStyles(theme), [theme]);
     const { refresh: refreshSession } = useAuth();
+    const store = useMessagingStore();
 
     const [chats, setChats] = useState<Chat[]>([]);
     const [query, setQuery] = useState("");
@@ -83,6 +94,8 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const mounted = useRef(true);
+    const resyncVersion = store.getResyncVersion();
+    const lastResyncRef = useRef(resyncVersion);
 
     useEffect(() => {
         mounted.current = true;
@@ -93,10 +106,10 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
     }, []);
 
     const load = useCallback(
-        async (isRefresh = false) => {
-            if (isRefresh) {
+        async (mode: "initial" | "refresh" | "silent" = "initial") => {
+            if (mode === "refresh") {
                 setRefreshing(true);
-            } else {
+            } else if (mode === "initial") {
                 setLoading(true);
             }
             setError(null);
@@ -112,7 +125,7 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
                     return;
                 }
 
-                setError("Couldn't load your conversations.");
+                if (mode !== "silent") setError("Couldn't load your conversations.");
             } finally {
                 if (mounted.current) {
                     setLoading(false);
@@ -126,6 +139,24 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
     useEffect(() => {
         void load();
     }, [load]);
+
+    // On reconnect, refresh the list so chats created or renamed while offline
+    // show up. Live message updates themselves come from the store.
+    useEffect(() => {
+        if (resyncVersion === lastResyncRef.current) return;
+        lastResyncRef.current = resyncVersion;
+
+        void load("silent");
+    }, [load, resyncVersion]);
+
+    const activityTime = useCallback(
+        (chat: Chat) => {
+            const last = store.getLastMessage(chat.id);
+            const time = Date.parse(last?.created_at ?? chat.created_at);
+            return Number.isNaN(time) ? 0 : time;
+        },
+        [store],
+    );
 
     const filteredChats = useMemo(() => {
         const needle = query.trim().toLowerCase();
@@ -143,8 +174,15 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
         });
     }, [chats, me.id, query]);
 
+    const orderedChats = useMemo(
+        () => [...filteredChats].sort((a, b) => activityTime(b) - activityTime(a)),
+        [activityTime, filteredChats],
+    );
+
     const openChat = (chat: Chat) => {
         const others = otherMembers(chat, me.id);
+
+        store.markRead(chat.id);
 
         router.push({
             pathname: "/chat/[id]",
@@ -152,6 +190,7 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
                 id: chat.id,
                 title: chatTitle(chat, me.id),
                 avatar: others.length === 1 ? others[0].user.avatar_url ?? "" : "",
+                members: JSON.stringify(chat.members ?? []),
             },
         });
     };
@@ -159,9 +198,13 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
     const renderItem = ({ item }: { item: Chat }) => {
         const title = chatTitle(item, me.id);
         const others = otherMembers(item, me.id);
-        const preview = chatPreview(item);
-        const time = formatChatTime(item.created_at);
+        const lastMessage = store.getLastMessage(item.id);
+        const preview = lastMessage
+            ? lastMessagePreview(lastMessage, me.id)
+            : chatPreview(item);
+        const time = formatChatTime(lastMessage?.created_at ?? item.created_at);
         const avatarUri = others.length === 1 ? others[0].user.avatar_url : undefined;
+        const unread = store.getUnread(item.id);
 
         return (
             <Pressable
@@ -178,9 +221,21 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
                         </Text>
                         {time ? <Text style={styles.time}>{time}</Text> : null}
                     </View>
-                    <Text style={styles.preview} numberOfLines={2}>
-                        {preview}
-                    </Text>
+                    <View style={styles.previewRow}>
+                        <Text
+                            style={[styles.preview, unread > 0 && styles.previewUnread]}
+                            numberOfLines={2}
+                        >
+                            {preview}
+                        </Text>
+                        {unread > 0 ? (
+                            <View style={styles.unreadBadge}>
+                                <Text style={styles.unreadText}>
+                                    {unread > 99 ? "99+" : unread}
+                                </Text>
+                            </View>
+                        ) : null}
+                    </View>
                 </View>
             </Pressable>
         );
@@ -233,7 +288,7 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
                 </View>
             ) : (
                 <FlatList
-                    data={filteredChats}
+                    data={orderedChats}
                     keyExtractor={(chat) => chat.id}
                     renderItem={renderItem}
                     ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -243,7 +298,7 @@ export default function ChatsScreen({ me }: ChatsScreenProps) {
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
-                            onRefresh={() => void load(true)}
+                            onRefresh={() => void load("refresh")}
                             tintColor={theme.text}
                             colors={[theme.text]}
                         />
@@ -340,10 +395,34 @@ const createStyles = (theme: Theme) =>
             color: theme.placeholder,
         },
         preview: {
+            flex: 1,
             marginTop: 3,
             fontSize: 15,
             lineHeight: 20,
             color: theme.placeholder,
+        },
+        previewRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+        },
+        previewUnread: {
+            color: theme.text,
+            fontWeight: "600",
+        },
+        unreadBadge: {
+            minWidth: 20,
+            height: 20,
+            paddingHorizontal: 6,
+            borderRadius: 10,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: theme.buttonColor,
+        },
+        unreadText: {
+            fontSize: 12,
+            fontWeight: "700",
+            color: theme.sendIcon,
         },
         separator: {
             height: StyleSheet.hairlineWidth,

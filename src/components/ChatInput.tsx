@@ -32,6 +32,7 @@ export default function ChatInput({input, setInput, onSubmit}: ChatInputProps) {
                 autoCorrect={false}
                 autoCapitalize="none"
                 multiline
+                maxLength={4000}
                 style={styles.textInput}
             />
             <Pressable

@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+    ActivityIndicator,
     FlatList,
     KeyboardAvoidingView,
     Platform,
@@ -9,68 +10,230 @@ import {
     View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+import { useAuth } from "@/auth/AuthProvider";
 import Avatar from "@/components/Avatar";
+import ChatInput from "@/components/ChatInput";
+import MarkdownText from "@/components/MarkdownText";
+import { useChatMessages, type ChatMessage } from "@/hooks/useChatMessages";
+import type { ChatMember } from "@/lib/wingd";
+import { useMessagingStore } from "@/messaging/MessagingProvider";
 import { useTheme } from "@/theme/ThemeProvider";
 import { Theme } from "@/theme/themes";
-import ChatInput from "@/components/ChatInput";
 
-type Message = {
-    id: string;
-    role: "user" | "assistant";
-    text: string;
-};
+const GROUP_GAP_MS = 5 * 60 * 1000;
 
 type ChatRoomProps = {
+    chatId: string;
     title: string;
     avatarUrl?: string;
+    members?: ChatMember[];
+    meId: string;
     onBack?: () => void;
 };
 
-export default function ChatRoom({ title, avatarUrl, onBack }: ChatRoomProps) {
-    const {theme} = useTheme();
+function formatMessageTime(value: string): string {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+
+    return date.toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+    });
+}
+
+// `older` is the message directly before `message` in chronological order.
+function startsNewGroup(older: ChatMessage | undefined, message: ChatMessage): boolean {
+    if (!older || older.sender_id !== message.sender_id) return true;
+
+    const olderTime = new Date(older.created_at).getTime();
+    const messageTime = new Date(message.created_at).getTime();
+    if (Number.isNaN(olderTime) || Number.isNaN(messageTime)) return true;
+
+    return Math.abs(messageTime - olderTime) > GROUP_GAP_MS;
+}
+
+export default function ChatRoom({
+    chatId,
+    title,
+    avatarUrl,
+    members = [],
+    meId,
+    onBack,
+}: ChatRoomProps) {
+    const { theme } = useTheme();
+    const { refresh } = useAuth();
+    const store = useMessagingStore();
     const styles = useMemo(() => createStyles(theme), [theme]);
 
-    const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
-    const listRef = useRef<FlatList<Message>>(null);
+    const listRef = useRef<FlatList<ChatMessage>>(null);
+    const atBottomRef = useRef(true);
 
-    const send = () => {
+    // While this screen is mounted it owns read receipts for the chat; the
+    // socket keeps appending to the same store it is reading from.
+    useEffect(() => {
+        store.setActiveChat(chatId);
+
+        return () => {
+            store.setActiveChat(null);
+        };
+    }, [chatId, store]);
+
+    const handleUnauthorized = useCallback(() => {
+        void refresh();
+    }, [refresh]);
+
+    const {
+        messages,
+        loading,
+        error,
+        hasMore,
+        loadingOlder,
+        olderError,
+        load,
+        loadOlder,
+        send,
+        retry,
+    } = useChatMessages(chatId, { meId, onUnauthorized: handleUnauthorized });
+
+    const membersById = useMemo(
+        () => new Map(members.map((member) => [member.user.id, member.user])),
+        [members],
+    );
+
+    const otherMemberCount = members.filter((member) => member.user.id !== meId).length;
+    const showSender = otherMemberCount !== 1;
+
+    // Newest first: the FlatList is inverted, so index 0 sits at the bottom.
+    const listData = useMemo(() => [...messages].reverse(), [messages]);
+
+    const handleSend = () => {
         const text = input.trim();
         if (!text) return;
 
-        const userMessage: Message = {
-            id: `${Date.now()}-user`,
-            role: "user",
-            text,
-        };
-        setMessages((prev) => [...prev, userMessage]);
         setInput("");
-
-        // Placeholder reply. Replace this with a real API call.
-        setTimeout(() => {
-            setMessages((prev) => [
-                ...prev,
-                {
-                    id: `${Date.now()}-assistant`,
-                    role: "assistant",
-                    text: `You said: ${text}`,
-                },
-            ]);
-        }, 600);
+        void send(text);
     };
 
-    const renderItem = ({ item }: { item: Message }) => {
-        const isUser = item.role === "user";
+    const lastMessage = messages[messages.length - 1];
+    const lastScrolledId = useRef<string | undefined>(undefined);
+
+    useEffect(() => {
+        if (!lastMessage || lastMessage.id === lastScrolledId.current) return;
+        lastScrolledId.current = lastMessage.id;
+
+        // Follow own sends and anything that arrives while the user is already
+        // at the bottom; don't yank them away from older history they're reading.
+        if (lastMessage.sender_id === meId || atBottomRef.current) {
+            listRef.current?.scrollToOffset({ offset: 0, animated: true });
+        }
+    }, [lastMessage, meId]);
+
+    const renderItem = ({ item, index }: { item: ChatMessage; index: number }) => {
+        const isMine = item.sender_id === meId;
+        const member = item.sender_id ? membersById.get(item.sender_id) : undefined;
+        const name = member?.display_name?.trim() || (item.sender_id ? "Unknown" : "System");
+        const isGroupStart = startsNewGroup(listData[index + 1], item);
+        const showAvatar = !isMine && showSender;
+        const status = item.status;
+
         return (
-            <View style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
+            <View
+                style={[
+                    styles.row,
+                    isMine ? styles.rowMine : styles.rowOther,
+                    isGroupStart && styles.rowGroupStart,
+                ]}
+            >
+                {showAvatar ? (
+                    <View style={styles.avatarSlot}>
+                        {isGroupStart ? (
+                            <Avatar
+                                name={name}
+                                uri={member?.avatar_url || undefined}
+                                size={28}
+                            />
+                        ) : null}
+                    </View>
+                ) : null}
+
                 <View
-                    style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}
+                    style={[
+                        styles.messageColumn,
+                        isMine ? styles.columnMine : styles.columnOther,
+                    ]}
                 >
-                    <Text style={styles.messageText}>{item.text}</Text>
+                    {isGroupStart ? (
+                        <View style={[styles.metaRow, isMine && styles.metaRowMine]}>
+                            {!isMine && showSender ? (
+                                <Text style={styles.senderName} numberOfLines={1}>
+                                    {name}
+                                </Text>
+                            ) : null}
+                            <Text style={styles.time}>
+                                {formatMessageTime(item.created_at)}
+                            </Text>
+                        </View>
+                    ) : null}
+
+                    <Pressable
+                        disabled={status !== "failed" || !item.localId}
+                        onPress={() => {
+                            if (item.localId) retry(item.localId);
+                        }}
+                        accessibilityRole={status === "failed" ? "button" : undefined}
+                        accessibilityLabel={
+                            status === "failed" ? "Message failed. Tap to retry." : undefined
+                        }
+                    >
+                        <View
+                            style={[
+                                styles.bubble,
+                                isMine ? styles.bubbleMine : styles.bubbleOther,
+                                status === "failed" && styles.bubbleFailed,
+                            ]}
+                        >
+                            <MarkdownText text={item.text} style={styles.messageText} />
+                        </View>
+                    </Pressable>
+
+                    {status === "sending" ? (
+                        <Text style={[styles.status, isMine && styles.statusMine]}>
+                            Sending…
+                        </Text>
+                    ) : null}
+                    {status === "failed" ? (
+                        <Text
+                            style={[
+                                styles.status,
+                                styles.statusFailed,
+                                isMine && styles.statusMine,
+                            ]}
+                        >
+                            Not sent · Tap to retry
+                        </Text>
+                    ) : null}
                 </View>
             </View>
         );
     };
+
+    const listFooter =
+        hasMore && loadingOlder ? (
+            <View style={styles.listFooter}>
+                <ActivityIndicator color={theme.placeholder} />
+            </View>
+        ) : hasMore && olderError ? (
+            <Pressable
+                onPress={() => void loadOlder()}
+                style={styles.listFooter}
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading earlier messages"
+            >
+                <Text style={styles.footerText}>{olderError} Tap to retry.</Text>
+            </Pressable>
+        ) : null;
 
     return (
         <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
@@ -103,22 +266,48 @@ export default function ChatRoom({ title, avatarUrl, onBack }: ChatRoomProps) {
                 style={styles.flex}
                 behavior={Platform.OS === "ios" ? "padding" : undefined}
             >
-                <FlatList
-                    ref={listRef}
-                    data={messages}
-                    keyExtractor={(m) => m.id}
-                    renderItem={renderItem}
-                    contentContainerStyle={styles.list}
-                    onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
-                    keyboardShouldPersistTaps="handled"
-                    ListEmptyComponent={
-                        <View style={styles.empty}>
-                            <Text style={styles.emptyText}>Start the conversation</Text>
-                        </View>
-                    }
-                />
+                {loading ? (
+                    <View style={styles.centered}>
+                        <ActivityIndicator color={theme.text} />
+                    </View>
+                ) : error ? (
+                    <View style={styles.centered}>
+                        <Text style={styles.emptyTitle}>Something went wrong</Text>
+                        <Text style={styles.emptySubtitle}>{error}</Text>
+                        <Pressable
+                            onPress={() => void load()}
+                            style={styles.retryButton}
+                            accessibilityRole="button"
+                        >
+                            <Text style={styles.retryText}>Try again</Text>
+                        </Pressable>
+                    </View>
+                ) : messages.length === 0 ? (
+                    <View style={styles.empty}>
+                        <Text style={styles.emptyText}>Start the conversation</Text>
+                    </View>
+                ) : (
+                    <FlatList
+                        ref={listRef}
+                        data={listData}
+                        inverted
+                        keyExtractor={(message) => message.localId ?? message.id}
+                        renderItem={renderItem}
+                        contentContainerStyle={styles.list}
+                        onEndReached={() => void loadOlder()}
+                        onEndReachedThreshold={0.4}
+                        ListFooterComponent={listFooter ?? undefined}
+                        keyboardShouldPersistTaps="handled"
+                        keyboardDismissMode="on-drag"
+                        onScroll={(event) => {
+                            atBottomRef.current =
+                                event.nativeEvent.contentOffset.y < 80;
+                        }}
+                        scrollEventThrottle={16}
+                    />
+                )}
 
-                <ChatInput input={input} setInput={setInput} onSubmit={send} />
+                <ChatInput input={input} setInput={setInput} onSubmit={handleSend} />
             </KeyboardAvoidingView>
         </SafeAreaView>
     );
@@ -171,44 +360,144 @@ const createStyles = (theme: Theme) =>
         },
         list: {
             flexGrow: 1,
-            padding: 16,
-            gap: 12,
+            paddingHorizontal: 16,
+            paddingVertical: 12,
+        },
+        centered: {
+            flex: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            padding: 32,
         },
         empty: {
             flex: 1,
             alignItems: "center",
             justifyContent: "center",
+            padding: 32,
         },
         emptyText: {
             fontSize: 22,
             fontWeight: "600",
             color: theme.text,
+            textAlign: "center",
+        },
+        emptyTitle: {
+            fontSize: 22,
+            fontWeight: "600",
+            color: theme.text,
+            textAlign: "center",
+        },
+        emptySubtitle: {
+            maxWidth: 280,
+            fontSize: 15,
+            lineHeight: 21,
+            color: theme.placeholder,
+            textAlign: "center",
+        },
+        retryButton: {
+            marginTop: 8,
+            paddingHorizontal: 20,
+            paddingVertical: 10,
+            borderRadius: 20,
+            backgroundColor: theme.buttonColor,
+        },
+        retryText: {
+            fontSize: 15,
+            fontWeight: "600",
+            color: theme.sendIcon,
+        },
+        listFooter: {
+            paddingVertical: 12,
+            alignItems: "center",
+            justifyContent: "center",
+        },
+        footerText: {
+            fontSize: 13,
+            color: theme.placeholder,
+            textAlign: "center",
         },
         row: {
             flexDirection: "row",
+            alignItems: "flex-start",
+            marginTop: 2,
         },
-        rowUser: {
+        rowGroupStart: {
+            marginTop: 14,
+        },
+        rowMine: {
             justifyContent: "flex-end",
         },
-        rowAssistant: {
+        rowOther: {
             justifyContent: "flex-start",
         },
+        avatarSlot: {
+            width: 28,
+            marginRight: 8,
+        },
+        messageColumn: {
+            maxWidth: "82%",
+            flexShrink: 1,
+        },
+        columnMine: {
+            alignItems: "flex-end",
+            marginLeft: "auto",
+        },
+        columnOther: {
+            alignItems: "flex-start",
+        },
+        metaRow: {
+            flexDirection: "row",
+            alignItems: "baseline",
+            gap: 6,
+            marginBottom: 3,
+            paddingHorizontal: 2,
+        },
+        metaRowMine: {
+            justifyContent: "flex-end",
+        },
+        senderName: {
+            flexShrink: 1,
+            fontSize: 13,
+            fontWeight: "600",
+            color: theme.text,
+        },
+        time: {
+            fontSize: 11,
+            color: theme.placeholder,
+        },
         bubble: {
-            maxWidth: "85%",
             paddingHorizontal: 14,
             paddingVertical: 10,
             borderRadius: 18,
         },
-        bubbleUser: {
+        bubbleMine: {
             backgroundColor: theme.userBubble,
         },
-        bubbleAssistant: {
+        bubbleOther: {
             backgroundColor: "transparent",
             paddingHorizontal: 0,
+            paddingVertical: 0,
+        },
+        bubbleFailed: {
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: "#D06060",
         },
         messageText: {
             fontSize: 16,
             lineHeight: 22,
             color: theme.text,
+        },
+        status: {
+            marginTop: 3,
+            paddingHorizontal: 2,
+            fontSize: 11,
+            color: theme.placeholder,
+        },
+        statusMine: {
+            textAlign: "right",
+        },
+        statusFailed: {
+            color: "#D06060",
         },
     });

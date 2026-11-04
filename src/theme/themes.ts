@@ -8,6 +8,9 @@ export type Theme = {
     buttonDisabledColor: string;
     sendIcon: string;
     separator: string;
+    link: string;
+    codeBackground: string;
+    quoteBorder: string;
 };
 
 export const lightTheme: Theme = {
@@ -20,6 +23,9 @@ export const lightTheme: Theme = {
     buttonDisabledColor: "#c7c7cc",
     sendIcon: "#ffffff",
     separator: "#e5e5ea",
+    link: "#0a66c2",
+    codeBackground: "#e9e9ec",
+    quoteBorder: "#d0d0d5",
 };
 
 export const darkTheme: Theme = {
@@ -32,4 +38,7 @@ export const darkTheme: Theme = {
     buttonDisabledColor: "#4a4a4a",
     sendIcon: "#000000",
     separator: "#383838",
+    link: "#7cc0ff",
+    codeBackground: "#383838",
+    quoteBorder: "#555555",
 };

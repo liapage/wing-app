@@ -4,7 +4,7 @@ import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
 import { Platform } from "react-native";
 
-const fallbackUrl = Platform.OS === "web" ? "" : "http://localhost:8080";
+const fallbackUrl = Platform.OS === "web" ? "" : "https://wing.lia.page";
 
 export const wingdUrl = (process.env.EXPO_PUBLIC_WINGD_URL ?? fallbackUrl).replace(/\/$/, "");
 const apiUrl = `${wingdUrl}/api`;
@@ -44,12 +44,35 @@ export type Chat = {
     members: ChatMember[];
 };
 
+export type Message = {
+    id: string;
+    chat_id: string;
+    sender_id: string | null;
+    text: string;
+    data: string | null;
+    created_at: string;
+};
+
+export type ChatMessagesPage = {
+    messages: Message[];
+    hasMore: boolean;
+};
+
 type MeResponse = {
     user: Me;
 };
 
 type ChatsResponse = {
     chats: Chat[];
+};
+
+type ChatMessagesResponse = {
+    messages: Message[];
+    has_more: boolean;
+};
+
+type SendChatMessageResponse = {
+    message: Message;
 };
 
 type SessionResponse = {
@@ -93,6 +116,11 @@ async function readToken(): Promise<string | null> {
     return SecureStore.getItemAsync(tokenKey);
 }
 
+// The WebSocket connection needs the same session token as the REST API.
+export async function getAccessToken(): Promise<string | null> {
+    return readToken();
+}
+
 async function saveToken(token: string): Promise<void> {
     if (Platform.OS === "web") {
         globalThis.localStorage?.setItem(tokenKey, token);
@@ -133,24 +161,62 @@ export async function fetchMe(): Promise<Me | null> {
 }
 
 export async function fetchChats(): Promise<Chat[]> {
-    const token = await readToken();
-    if (!token) throw new WingdApiError("GET /api/chats/me", 401);
+    const body = await authorizedRequest<ChatsResponse>("/chats/me");
+    return body.chats ?? [];
+}
 
-    const response = await fetch(`${apiUrl}/chats/me`, {
-        headers: {
-            Accept: "application/json",
-            Authorization: `Bearer ${token}`,
-        },
-    });
+async function authorizedRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const token = await readToken();
+    if (!token) throw new WingdApiError(path, 401);
+
+    const headers = new Headers(init.headers);
+    headers.set("Accept", "application/json");
+    headers.set("Authorization", `Bearer ${token}`);
+    if (init.body && !headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+    }
+
+    const response = await fetch(`${apiUrl}${path}`, { ...init, headers });
 
     if (response.status === 401) {
         await clearToken();
-        throw new WingdApiError("GET /api/chats/me", 401);
+        throw new WingdApiError(path, 401);
     }
-    if (!response.ok) throw new WingdApiError("GET /api/chats/me", response.status);
+    if (!response.ok) throw new WingdApiError(path, response.status);
 
-    const body = (await response.json()) as ChatsResponse;
-    return body.chats ?? [];
+    return (await response.json()) as T;
+}
+
+export async function fetchChatMessages(
+    chatId: string,
+    options: { before?: string; after?: string; limit?: number } = {},
+): Promise<ChatMessagesPage> {
+    const query = new URLSearchParams();
+    if (options.before) query.set("before", options.before);
+    if (options.after) query.set("after", options.after);
+    if (options.limit) query.set("limit", String(options.limit));
+
+    const suffix = query.toString();
+    const path = `/chats/${encodeURIComponent(chatId)}/messages${suffix ? `?${suffix}` : ""}`;
+    const body = await authorizedRequest<ChatMessagesResponse>(path);
+
+    return {
+        messages: body.messages ?? [],
+        hasMore: body.has_more ?? false,
+    };
+}
+
+export async function sendChatMessage(chatId: string, text: string): Promise<Message> {
+    const body = await authorizedRequest<SendChatMessageResponse>(
+        `/chats/${encodeURIComponent(chatId)}/messages`,
+        {
+            method: "POST",
+            body: JSON.stringify({ text }),
+        },
+    );
+
+    if (!body.message) throw new Error("POST /api/chats/{chatId}/messages: missing message");
+    return body.message;
 }
 
 function getRedirectUri(): string {

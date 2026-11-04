@@ -1,0 +1,95 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: "true"
+  EXPO_NO_TELEMETRY: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure release signing
+        env:
+          WING_KEYSTORE_BASE64: ${{ secrets.WING_KEYSTORE_BASE64 }}
+          WING_KEYSTORE_PASSWORD: ${{ secrets.WING_KEYSTORE_PASSWORD }}
+          WING_KEY_ALIAS: ${{ secrets.WING_KEY_ALIAS }}
+          WING_KEY_PASSWORD: ${{ secrets.WING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WING_KEYSTORE_BASE64" ] || [ -z "$WING_KEYSTORE_PASSWORD" ]; then
+            echo "::error::Add WING_KEYSTORE_BASE64 and WING_KEYSTORE_PASSWORD repository secrets (see README)."
+            exit 1
+          fi
+
+          mkdir -p .secrets
+          printf '%s' "$WING_KEYSTORE_BASE64" | base64 -d > .secrets/wing-release.keystore
+
+          key_alias="${WING_KEY_ALIAS:-wing}"
+          key_password="${WING_KEY_PASSWORD:-$WING_KEYSTORE_PASSWORD}"
+          {
+            echo "storeFile=.secrets/wing-release.keystore"
+            echo "storePassword=$WING_KEYSTORE_PASSWORD"
+            echo "keyAlias=$key_alias"
+            echo "keyPassword=$key_password"
+          } > .secrets/keystore.properties
+          chmod 600 .secrets/wing-release.keystore .secrets/keystore.properties
+
+      - name: Build signed APK
+        run: |
+          chmod +x scripts/build-android.sh
+          ./scripts/build-android.sh
+
+      - name: Verify APK
+        run: |
+          set -euo pipefail
+          apk="$(ls dist/*.apk | head -1)"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          "$apksigner" verify --print-certs "$apk"
+
+          unzip -p "$apk" assets/index.android.bundle > /tmp/index.android.bundle
+          strings /tmp/index.android.bundle | grep -q "1560800700575785090"
+          echo "Verified $apk is signed and contains the production Discord client ID."
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wing-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
