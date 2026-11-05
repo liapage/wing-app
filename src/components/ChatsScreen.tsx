@@ -372,7 +372,7 @@ const createStyles = (theme: Theme) =>
             paddingVertical: 10,
         },
         rowPressed: {
-            backgroundColor: theme.userBubble,
+            backgroundColor: theme.pressedRow,
         },
         rowContent: {
             flex: 1,

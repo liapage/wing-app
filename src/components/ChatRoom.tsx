@@ -41,15 +41,50 @@ function formatMessageTime(value: string): string {
     });
 }
 
-// `older` is the message directly before `message` in chronological order.
-function startsNewGroup(older: ChatMessage | undefined, message: ChatMessage): boolean {
-    if (!older || older.sender_id !== message.sender_id) return true;
+// Whether the message next to `index` belongs to the same run of consecutive
+// messages: same sender, close enough in time. Both ends of the list count as
+// a neighbourless message. System messages have no sender, so each one
+// stands alone.
+function inSameGroup(
+    messages: readonly ChatMessage[],
+    index: number,
+    step: 1 | -1,
+): boolean {
+    const message = messages[index];
+    // Indices off either end of the array read back `undefined`.
+    const neighbour = messages[index + step];
+    if (!message || !neighbour) return false;
+    if (!message.sender_id || !neighbour.sender_id) return false;
+    if (message.sender_id !== neighbour.sender_id) return false;
 
-    const olderTime = new Date(older.created_at).getTime();
-    const messageTime = new Date(message.created_at).getTime();
-    if (Number.isNaN(olderTime) || Number.isNaN(messageTime)) return true;
+    const time = new Date(message.created_at).getTime();
+    const neighbourTime = new Date(neighbour.created_at).getTime();
+    if (Number.isNaN(time) || Number.isNaN(neighbourTime)) return false;
 
-    return Math.abs(messageTime - olderTime) > GROUP_GAP_MS;
+    return Math.abs(neighbourTime - time) <= GROUP_GAP_MS;
+}
+
+const BUBBLE_RADIUS = 18;
+const SQUARED_RADIUS = 4;
+
+function bubbleRadii(
+    side: "left" | "right",
+    inGroupWithOlder: boolean,
+    inGroupWithNewer: boolean,
+) {
+    console.log(side, inGroupWithOlder, inGroupWithNewer);
+    const corner = (touchesNeighbour: boolean) =>
+        touchesNeighbour ? SQUARED_RADIUS : BUBBLE_RADIUS;
+
+    return side === "right"
+        ? {
+              borderTopRightRadius: corner(inGroupWithOlder),
+              borderBottomRightRadius: corner(inGroupWithNewer),
+          }
+        : {
+            borderTopLeftRadius: corner(inGroupWithOlder),
+            borderBottomLeftRadius: corner(inGroupWithNewer),
+          };
 }
 
 export default function ChatRoom({
@@ -101,8 +136,9 @@ export default function ChatRoom({
         [members],
     );
 
+    // Sender names only help when more than one other person is in the chat.
     const otherMemberCount = members.filter((member) => member.user.id !== meId).length;
-    const showSender = otherMemberCount !== 1;
+    const hasMultipleSenders = otherMemberCount !== 1;
 
     // Newest first: the FlatList is inverted, so index 0 sits at the bottom.
     const listData = useMemo(() => [...messages].reverse(), [messages]);
@@ -133,8 +169,15 @@ export default function ChatRoom({
         const isMine = item.sender_id === meId;
         const member = item.sender_id ? membersById.get(item.sender_id) : undefined;
         const name = member?.display_name?.trim() || (item.sender_id ? "Unknown" : "System");
-        const isGroupStart = startsNewGroup(listData[index + 1], item);
-        const showAvatar = !isMine && showSender;
+        // `listData` is newest first, so the older message sits at index + 1
+        // and the newer one at index - 1.
+        const inGroupWithOlder = inSameGroup(listData, index, 1);
+        const inGroupWithNewer = inSameGroup(listData, index, -1);
+        const isSystem = !item.sender_id;
+        // Received messages always carry the avatar, even in one-to-one chats;
+        // the sender's name is only useful when the chat has several people.
+        const showSender = !isMine && !isSystem;
+        const showSenderName = showSender && hasMultipleSenders;
         const status = item.status;
 
         return (
@@ -142,12 +185,13 @@ export default function ChatRoom({
                 style={[
                     styles.row,
                     isMine ? styles.rowMine : styles.rowOther,
-                    isGroupStart && styles.rowGroupStart,
+                    !inGroupWithOlder && styles.rowGroupStart,
+                    inGroupWithOlder && styles.rowSameSender,
                 ]}
             >
-                {showAvatar ? (
+                {showSender ? (
                     <View style={styles.avatarSlot}>
-                        {isGroupStart ? (
+                        {!inGroupWithOlder ? (
                             <Avatar
                                 name={name}
                                 uri={member?.avatar_url || undefined}
@@ -163,9 +207,9 @@ export default function ChatRoom({
                         isMine ? styles.columnMine : styles.columnOther,
                     ]}
                 >
-                    {isGroupStart ? (
-                        <View style={[styles.metaRow, isMine && styles.metaRowMine]}>
-                            {!isMine && showSender ? (
+                    {!inGroupWithOlder ? (
+                        <View style={styles.metaRow}>
+                            {showSenderName ? (
                                 <Text style={styles.senderName} numberOfLines={1}>
                                     {name}
                                 </Text>
@@ -191,9 +235,22 @@ export default function ChatRoom({
                                 styles.bubble,
                                 isMine ? styles.bubbleMine : styles.bubbleOther,
                                 status === "failed" && styles.bubbleFailed,
+                                bubbleRadii(
+                                    isMine ? "right" : "left",
+                                    inGroupWithOlder,
+                                    inGroupWithNewer,
+                                ),
                             ]}
                         >
-                            <MarkdownText text={item.text} style={styles.messageText} />
+                            <MarkdownText
+                                text={item.text}
+                                style={
+                                    isMine
+                                        ? [styles.messageText, styles.messageTextMine]
+                                        : styles.messageText
+                                }
+                                onAccent={isMine}
+                            />
                         </View>
                     </Pressable>
 
@@ -427,6 +484,11 @@ const createStyles = (theme: Theme) =>
         rowGroupStart: {
             marginTop: 14,
         },
+        // Consecutive bubbles from one sender sit slightly closer together so
+        // they read as one stack.
+        rowSameSender: {
+            marginTop: 4,
+        },
         rowMine: {
             justifyContent: "flex-end",
         },
@@ -435,6 +497,9 @@ const createStyles = (theme: Theme) =>
         },
         avatarSlot: {
             width: 28,
+            // Nudges the avatar down so it lines up with the first line of text
+            // instead of its top edge.
+            marginTop: 3,
             marginRight: 8,
         },
         messageColumn: {
@@ -455,9 +520,6 @@ const createStyles = (theme: Theme) =>
             marginBottom: 3,
             paddingHorizontal: 2,
         },
-        metaRowMine: {
-            justifyContent: "flex-end",
-        },
         senderName: {
             flexShrink: 1,
             fontSize: 13,
@@ -471,15 +533,13 @@ const createStyles = (theme: Theme) =>
         bubble: {
             paddingHorizontal: 14,
             paddingVertical: 10,
-            borderRadius: 18,
+            borderRadius: BUBBLE_RADIUS,
         },
         bubbleMine: {
-            backgroundColor: theme.userBubble,
+            backgroundColor: theme.sentBubble,
         },
         bubbleOther: {
-            backgroundColor: "transparent",
-            paddingHorizontal: 0,
-            paddingVertical: 0,
+            backgroundColor: theme.otherBubble,
         },
         bubbleFailed: {
             borderWidth: StyleSheet.hairlineWidth,
@@ -489,6 +549,9 @@ const createStyles = (theme: Theme) =>
             fontSize: 16,
             lineHeight: 22,
             color: theme.text,
+        },
+        messageTextMine: {
+            color: theme.sentBubbleText,
         },
         status: {
             marginTop: 3,

@@ -38,6 +38,18 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      # The runner image ships NDK 27.3.x and CMake 3.31.x, but React Native /
+      # Expo pin NDK 27.1.12297006 and AGP asks for CMake 3.22.1, so every job
+      # downloads ~1 GB of SDK components before compiling anything. Cache the
+      # exact versions the build wants; a miss just means the old behaviour.
+      - name: Cache Android NDK and CMake
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/ndk/27.1.12297006
+            /usr/local/lib/android/sdk/cmake/3.22.1
+          key: android-sdk-ndk-27.1.12297006-cmake-3.22.1-${{ runner.os }}
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 

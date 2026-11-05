@@ -34,6 +34,7 @@ if [[ ! -f android/app/build.gradle ]]; then
 fi
 
 python3 scripts/patch-android-signing.py
+python3 scripts/tune-android-gradle.py
 
 ARCHS="${ARCHS:-arm64-v8a,armeabi-v7a}"
 (cd android && ./gradlew :app:assembleRelease "-PreactNativeArchitectures=$ARCHS")

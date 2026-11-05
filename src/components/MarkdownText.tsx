@@ -17,6 +17,8 @@ import type { Theme } from "@/theme/themes";
 type MarkdownTextProps = {
     text: string;
     style?: StyleProp<TextStyle>;
+    /** Render on a saturated accent surface (e.g. the blue sent bubble). */
+    onAccent?: boolean;
 };
 
 const MONOSPACE_FONT = Platform.select({
@@ -150,9 +152,9 @@ function renderBlocks(
     });
 }
 
-export default function MarkdownText({ text, style }: MarkdownTextProps) {
+export default function MarkdownText({ text, style, onAccent = false }: MarkdownTextProps) {
     const { theme } = useTheme();
-    const styles = useMemo(() => createStyles(theme), [theme]);
+    const styles = useMemo(() => createStyles(theme, onAccent), [theme, onAccent]);
     const blocks = useMemo(() => parseMarkdown(text), [text]);
 
     if (blocks.length === 0) return null;
@@ -172,8 +174,11 @@ export default function MarkdownText({ text, style }: MarkdownTextProps) {
     );
 }
 
-const createStyles = (theme: Theme) =>
-    StyleSheet.create({
+const createStyles = (theme: Theme, onAccent = false) => {
+    const textColor = onAccent ? theme.sentBubbleText : theme.text;
+    const mutedColor = onAccent ? "rgba(255,255,255,0.75)" : theme.placeholder;
+
+    return StyleSheet.create({
         container: {
             flexShrink: 1,
             gap: 4,
@@ -181,7 +186,7 @@ const createStyles = (theme: Theme) =>
         text: {
             fontSize: 16,
             lineHeight: 22,
-            color: theme.text,
+            color: textColor,
         },
         strong: {
             fontWeight: "700",
@@ -195,12 +200,12 @@ const createStyles = (theme: Theme) =>
         inlineCode: {
             fontFamily: MONOSPACE_FONT,
             fontSize: 14,
-            color: theme.text,
-            backgroundColor: theme.codeBackground,
+            color: textColor,
+            backgroundColor: onAccent ? "rgba(255,255,255,0.2)" : theme.codeBackground,
             borderRadius: 4,
         },
         link: {
-            color: theme.link,
+            color: onAccent ? theme.sentBubbleText : theme.link,
             textDecorationLine: "underline",
         },
         heading1: {
@@ -223,18 +228,18 @@ const createStyles = (theme: Theme) =>
             paddingHorizontal: 10,
             paddingVertical: 8,
             borderRadius: 8,
-            backgroundColor: theme.codeBackground,
+            backgroundColor: onAccent ? "rgba(0,0,0,0.18)" : theme.codeBackground,
         },
         codeText: {
             fontFamily: MONOSPACE_FONT,
             fontSize: 13,
             lineHeight: 19,
-            color: theme.text,
+            color: textColor,
         },
         quote: {
             paddingLeft: 10,
             borderLeftWidth: 3,
-            borderLeftColor: theme.quoteBorder,
+            borderLeftColor: onAccent ? "rgba(255,255,255,0.45)" : theme.quoteBorder,
             gap: 4,
         },
         list: {
@@ -248,7 +253,7 @@ const createStyles = (theme: Theme) =>
         listMarker: {
             minWidth: 16,
             textAlign: "right",
-            color: theme.placeholder,
+            color: mutedColor,
         },
         listContent: {
             flex: 1,
@@ -257,6 +262,7 @@ const createStyles = (theme: Theme) =>
         rule: {
             height: StyleSheet.hairlineWidth,
             marginVertical: 4,
-            backgroundColor: theme.separator,
+            backgroundColor: onAccent ? "rgba(255,255,255,0.3)" : theme.separator,
         },
     });
+};
