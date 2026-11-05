@@ -72,7 +72,6 @@ function bubbleRadii(
     inGroupWithOlder: boolean,
     inGroupWithNewer: boolean,
 ) {
-    console.log(side, inGroupWithOlder, inGroupWithNewer);
     const corner = (touchesNeighbour: boolean) =>
         touchesNeighbour ? SQUARED_RADIUS : BUBBLE_RADIUS;
 
@@ -136,10 +135,6 @@ export default function ChatRoom({
         [members],
     );
 
-    // Sender names only help when more than one other person is in the chat.
-    const otherMemberCount = members.filter((member) => member.user.id !== meId).length;
-    const hasMultipleSenders = otherMemberCount !== 1;
-
     // Newest first: the FlatList is inverted, so index 0 sits at the bottom.
     const listData = useMemo(() => [...messages].reverse(), [messages]);
 
@@ -174,10 +169,8 @@ export default function ChatRoom({
         const inGroupWithOlder = inSameGroup(listData, index, 1);
         const inGroupWithNewer = inSameGroup(listData, index, -1);
         const isSystem = !item.sender_id;
-        // Received messages always carry the avatar, even in one-to-one chats;
-        // the sender's name is only useful when the chat has several people.
+        // Received messages always carry the avatar, even in one-to-one chats.
         const showSender = !isMine && !isSystem;
-        const showSenderName = showSender && hasMultipleSenders;
         const status = item.status;
 
         return (
@@ -209,7 +202,9 @@ export default function ChatRoom({
                 >
                     {!inGroupWithOlder ? (
                         <View style={styles.metaRow}>
-                            {showSenderName ? (
+                            {/* Your own name is redundant above your bubbles;
+                                received messages name the sender left of the time. */}
+                            {!isMine ? (
                                 <Text style={styles.senderName} numberOfLines={1}>
                                     {name}
                                 </Text>
