@@ -74,5 +74,6 @@ Chat messages support a lightweight subset of markdown:
 - `**bold**`, `*italic*`, `~~strikethrough~~`, and `` `inline code` ``
 - Links written as `[label](https://example.com)`, `<https://example.com>`, or as bare `https://` URLs
 - Fenced code blocks (triple backticks), headings, blockquotes, ordered/unordered lists, and horizontal rules
+- Consecutive agent messages whose only content is a `tooluse` or `toolerror` fenced block are grouped into one collapsible row; collapsed it shows the latest block, and tapping it reveals every call in the run
 
 Formatting is rendered in every conversation; chat-list previews and accessibility labels use the plain text without the markdown syntax.

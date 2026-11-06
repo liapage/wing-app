@@ -18,6 +18,8 @@ export type Theme = {
     link: string;
     codeBackground: string;
     quoteBorder: string;
+    /** Errors, failed sends and `toolerror` blocks. */
+    error: string;
 };
 
 export const lightTheme: Theme = {
@@ -36,6 +38,7 @@ export const lightTheme: Theme = {
     link: "#0a66c2",
     codeBackground: "#e9e9ec",
     quoteBorder: "#d0d0d5",
+    error: "#D06060",
 };
 
 export const darkTheme: Theme = {
@@ -54,4 +57,5 @@ export const darkTheme: Theme = {
     link: "#7cc0ff",
     codeBackground: "#383838",
     quoteBorder: "#555555",
+    error: "#D06060",
 };

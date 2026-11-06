@@ -14,9 +14,14 @@ import { useAuth } from "@/auth/AuthProvider";
 import Avatar from "@/components/Avatar";
 import ChatInput from "@/components/ChatInput";
 import MarkdownText from "@/components/MarkdownText";
-import { useChatMessages, type ChatMessage } from "@/hooks/useChatMessages";
+import ToolMessageGroup from "@/components/ToolMessageGroup";
+import { useChatMessages } from "@/hooks/useChatMessages";
 import type { ChatMember } from "@/lib/wingd";
 import { useMessagingStore } from "@/messaging/MessagingProvider";
+import {
+    buildChatListItems,
+    type ChatListItem,
+} from "@/messaging/toolMessages";
 import { useTheme } from "@/theme/ThemeProvider";
 import { Theme } from "@/theme/themes";
 
@@ -43,22 +48,26 @@ function formatMessageTime(value: string): string {
 
 // Whether the message next to `index` belongs to the same run of consecutive
 // messages: same sender, close enough in time. Both ends of the list count as
-// a neighbourless message. System messages have no sender, so each one
-// stands alone.
+// a neighbourless message, and tool groups always break a run. System messages
+// have no sender, so each one stands alone.
 function inSameGroup(
-    messages: readonly ChatMessage[],
+    items: readonly ChatListItem[],
     index: number,
     step: 1 | -1,
 ): boolean {
-    const message = messages[index];
+    const item = items[index];
     // Indices off either end of the array read back `undefined`.
-    const neighbour = messages[index + step];
-    if (!message || !neighbour) return false;
-    if (!message.sender_id || !neighbour.sender_id) return false;
-    if (message.sender_id !== neighbour.sender_id) return false;
+    const neighbour = items[index + step];
+    if (!item || !neighbour) return false;
+    if (item.kind !== "message" || neighbour.kind !== "message") return false;
+
+    const message = item.message;
+    const neighbourMessage = neighbour.message;
+    if (!message.sender_id || !neighbourMessage.sender_id) return false;
+    if (message.sender_id !== neighbourMessage.sender_id) return false;
 
     const time = new Date(message.created_at).getTime();
-    const neighbourTime = new Date(neighbour.created_at).getTime();
+    const neighbourTime = new Date(neighbourMessage.created_at).getTime();
     if (Number.isNaN(time) || Number.isNaN(neighbourTime)) return false;
 
     return Math.abs(neighbourTime - time) <= GROUP_GAP_MS;
@@ -100,7 +109,7 @@ export default function ChatRoom({
     const styles = useMemo(() => createStyles(theme), [theme]);
 
     const [input, setInput] = useState("");
-    const listRef = useRef<FlatList<ChatMessage>>(null);
+    const listRef = useRef<FlatList<ChatListItem>>(null);
     const atBottomRef = useRef(true);
 
     // While this screen is mounted it owns read receipts for the chat; the
@@ -136,7 +145,12 @@ export default function ChatRoom({
     );
 
     // Newest first: the FlatList is inverted, so index 0 sits at the bottom.
-    const listData = useMemo(() => [...messages].reverse(), [messages]);
+    // Consecutive tool calls collapse into one row here rather than in the
+    // message hook, keeping the raw message store untouched.
+    const listData = useMemo(
+        () => buildChatListItems(messages).reverse(),
+        [messages],
+    );
 
     const handleSend = () => {
         const text = input.trim();
@@ -160,18 +174,85 @@ export default function ChatRoom({
         }
     }, [lastMessage, meId]);
 
-    const renderItem = ({ item, index }: { item: ChatMessage; index: number }) => {
-        const isMine = item.sender_id === meId;
-        const member = item.sender_id ? membersById.get(item.sender_id) : undefined;
-        const name = member?.display_name?.trim() || (item.sender_id ? "Unknown" : "System");
+    const renderItem = ({ item, index }: { item: ChatListItem; index: number }) => {
+        if (item.kind === "toolGroup") {
+            const latest = item.messages[item.messages.length - 1];
+            const isMine = latest.sender_id === meId;
+            const member = latest.sender_id
+                ? membersById.get(latest.sender_id)
+                : undefined;
+            const name =
+                member?.display_name?.trim() ||
+                (latest.sender_id ? "Unknown" : "System");
+            const showSender = !isMine && Boolean(latest.sender_id);
+
+            return (
+                <View
+                    style={[
+                        styles.row,
+                        isMine ? styles.rowMine : styles.rowOther,
+                        styles.rowGroupStart,
+                    ]}
+                >
+                    {showSender ? (
+                        <View style={styles.avatarSlot}>
+                            <Avatar
+                                name={name}
+                                uri={member?.avatar_url || undefined}
+                                size={28}
+                            />
+                        </View>
+                    ) : null}
+
+                    <View
+                        style={[
+                            styles.messageColumn,
+                            isMine ? styles.columnMine : styles.columnOther,
+                        ]}
+                    >
+                        <View style={styles.metaRow}>
+                            {!isMine ? (
+                                <Text style={styles.senderName} numberOfLines={1}>
+                                    {name}
+                                </Text>
+                            ) : null}
+                            <Text style={styles.time}>
+                                {formatMessageTime(latest.created_at)}
+                            </Text>
+                        </View>
+
+                        <View
+                            style={[
+                                styles.bubble,
+                                isMine ? styles.bubbleMine : styles.bubbleOther,
+                            ]}
+                        >
+                            <ToolMessageGroup
+                                messages={item.messages}
+                                onAccent={isMine}
+                            />
+                        </View>
+                    </View>
+                </View>
+            );
+        }
+
+        const message = item.message;
+        const isMine = message.sender_id === meId;
+        const member = message.sender_id
+            ? membersById.get(message.sender_id)
+            : undefined;
+        const name =
+            member?.display_name?.trim() ||
+            (message.sender_id ? "Unknown" : "System");
         // `listData` is newest first, so the older message sits at index + 1
         // and the newer one at index - 1.
         const inGroupWithOlder = inSameGroup(listData, index, 1);
         const inGroupWithNewer = inSameGroup(listData, index, -1);
-        const isSystem = !item.sender_id;
+        const isSystem = !message.sender_id;
         // Received messages always carry the avatar, even in one-to-one chats.
         const showSender = !isMine && !isSystem;
-        const status = item.status;
+        const status = message.status;
 
         return (
             <View
@@ -210,15 +291,15 @@ export default function ChatRoom({
                                 </Text>
                             ) : null}
                             <Text style={styles.time}>
-                                {formatMessageTime(item.created_at)}
+                                {formatMessageTime(message.created_at)}
                             </Text>
                         </View>
                     ) : null}
 
                     <Pressable
-                        disabled={status !== "failed" || !item.localId}
+                        disabled={status !== "failed" || !message.localId}
                         onPress={() => {
-                            if (item.localId) retry(item.localId);
+                            if (message.localId) retry(message.localId);
                         }}
                         accessibilityRole={status === "failed" ? "button" : undefined}
                         accessibilityLabel={
@@ -238,7 +319,7 @@ export default function ChatRoom({
                             ]}
                         >
                             <MarkdownText
-                                text={item.text}
+                                text={message.text}
                                 style={
                                     isMine
                                         ? [styles.messageText, styles.messageTextMine]
@@ -345,7 +426,7 @@ export default function ChatRoom({
                         ref={listRef}
                         data={listData}
                         inverted
-                        keyExtractor={(message) => message.localId ?? message.id}
+                        keyExtractor={(item) => item.key}
                         renderItem={renderItem}
                         contentContainerStyle={styles.list}
                         onEndReached={() => void loadOlder()}
@@ -538,7 +619,7 @@ const createStyles = (theme: Theme) =>
         },
         bubbleFailed: {
             borderWidth: StyleSheet.hairlineWidth,
-            borderColor: "#D06060",
+            borderColor: theme.error,
         },
         messageText: {
             fontSize: 16,
@@ -558,6 +639,6 @@ const createStyles = (theme: Theme) =>
             textAlign: "right",
         },
         statusFailed: {
-            color: "#D06060",
+            color: theme.error,
         },
     });
