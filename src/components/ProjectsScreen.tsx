@@ -3,6 +3,7 @@ import { SymbolView } from "expo-symbols";
 import {
     ActivityIndicator,
     FlatList,
+    Keyboard,
     Pressable,
     RefreshControl,
     StyleSheet,
@@ -14,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAuth } from "@/auth/AuthProvider";
 import {
+    createProjectTask,
     fetchProjectTasks,
     fetchProjects,
     updateProjectTask,
@@ -51,13 +53,21 @@ export default function ProjectsScreen() {
     const [actionError, setActionError] = useState<string | null>(null);
     const [editing, setEditing] = useState<TaskEdit | null>(null);
     const [showCompleted, setShowCompleted] = useState<Record<string, boolean>>({});
+    const [addingToProject, setAddingToProject] = useState<string | null>(null);
+    const [newTaskName, setNewTaskName] = useState("");
+    const [newTaskDescription, setNewTaskDescription] = useState("");
     const mounted = useRef(true);
+    const addingTaskProject = useRef<string | null>(null);
+    const newTaskFocused = useRef(false);
+    const newTaskBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const submittingNewTask = useRef(false);
 
     useEffect(() => {
         mounted.current = true;
 
         return () => {
             mounted.current = false;
+            if (newTaskBlurTimer.current) clearTimeout(newTaskBlurTimer.current);
         };
     }, []);
 
@@ -187,6 +197,7 @@ export default function ProjectsScreen() {
     const toggleTaskCompletion = async (projectId: string, task: Task) => {
         const completed = !task.completed;
 
+        Keyboard.dismiss();
         setActionError(null);
         setEditing((prev) => (prev?.taskId === task.id ? null : prev));
         patchTask(projectId, task.id, { completed });
@@ -207,6 +218,149 @@ export default function ProjectsScreen() {
                     : "Couldn't reopen the task.",
             );
         }
+    };
+
+    const clearNewTaskBlurTimer = () => {
+        if (newTaskBlurTimer.current) {
+            clearTimeout(newTaskBlurTimer.current);
+            newTaskBlurTimer.current = null;
+        }
+    };
+
+    const closeNewTask = () => {
+        clearNewTaskBlurTimer();
+        addingTaskProject.current = null;
+        newTaskFocused.current = false;
+        setAddingToProject(null);
+        setNewTaskName("");
+        setNewTaskDescription("");
+    };
+
+    const beginAddingTask = (projectId: string) => {
+        clearNewTaskBlurTimer();
+        addingTaskProject.current = projectId;
+        newTaskFocused.current = false;
+        setActionError(null);
+        setAddingToProject(projectId);
+        setNewTaskName("");
+        setNewTaskDescription("");
+    };
+
+    const submitNewTask = async (projectId: string) => {
+        if (submittingNewTask.current) return;
+        if (addingTaskProject.current !== projectId) return;
+
+        const name = newTaskName.trim();
+        const description = newTaskDescription.trim();
+        const draftName = newTaskName;
+        const draftDescription = newTaskDescription;
+
+        closeNewTask();
+        if (!name) return;
+
+        submittingNewTask.current = true;
+        setActionError(null);
+
+        try {
+            const task = await createProjectTask(projectId, { name, description });
+
+            setProjects((prev) =>
+                prev.map((project) =>
+                    project.id === projectId
+                        ? { ...project, tasks: [...project.tasks, task] }
+                        : project,
+                ),
+            );
+        } catch (err) {
+            if (err instanceof WingdApiError && err.status === 401) {
+                await refreshSession();
+                return;
+            }
+
+            // Keep the draft so the text isn't lost when a save fails.
+            addingTaskProject.current = projectId;
+            setAddingToProject(projectId);
+            setNewTaskName(draftName);
+            setNewTaskDescription(draftDescription);
+            setActionError("Couldn't add the task.");
+        } finally {
+            submittingNewTask.current = false;
+        }
+    };
+
+    const handleNewTaskFocus = () => {
+        newTaskFocused.current = true;
+        clearNewTaskBlurTimer();
+    };
+
+    const handleNewTaskBlur = (projectId: string) => {
+        newTaskFocused.current = false;
+        clearNewTaskBlurTimer();
+        // A blur fires before the next field gains focus, so wait briefly
+        // before treating it as the end of the draft.
+        newTaskBlurTimer.current = setTimeout(() => {
+            newTaskBlurTimer.current = null;
+            if (newTaskFocused.current) return;
+            if (addingTaskProject.current !== projectId) return;
+            void submitNewTask(projectId);
+        }, 100);
+    };
+
+    const renderAddTask = (projectId: string) => {
+        if (addingToProject === projectId) {
+            return (
+                <View style={styles.taskRow}>
+                    <View style={styles.taskCheck} />
+                    <View style={styles.taskContent}>
+                        <TextInput
+                            value={newTaskName}
+                            onChangeText={setNewTaskName}
+                            placeholder="Task title"
+                            placeholderTextColor={theme.placeholder}
+                            style={[styles.taskName, styles.taskNameInput]}
+                            autoFocus
+                            returnKeyType="done"
+                            onFocus={handleNewTaskFocus}
+                            onBlur={() => handleNewTaskBlur(projectId)}
+                            accessibilityLabel="New task title"
+                        />
+                        <TextInput
+                            value={newTaskDescription}
+                            onChangeText={setNewTaskDescription}
+                            placeholder="Add description"
+                            placeholderTextColor={theme.placeholder}
+                            style={[styles.taskDescription, styles.taskDescriptionInput]}
+                            multiline
+                            returnKeyType="done"
+                            submitBehavior="blurAndSubmit"
+                            onFocus={handleNewTaskFocus}
+                            onBlur={() => handleNewTaskBlur(projectId)}
+                            accessibilityLabel="New task description"
+                        />
+                    </View>
+                </View>
+            );
+        }
+
+        return (
+            <Pressable
+                onPress={() => beginAddingTask(projectId)}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel="Add task"
+                style={({ pressed }) => [
+                    styles.addTaskRow,
+                    pressed && styles.addTaskRowPressed,
+                ]}
+            >
+                <SymbolView
+                    name={{ ios: "plus", android: "add", web: "add" }}
+                    size={16}
+                    tintColor={theme.placeholder}
+                />
+                <Text style={styles.addTaskLabel}>Add task</Text>
+            </Pressable>
+        );
     };
 
     const renderTask = (projectId: string, task: Task) => {
@@ -406,12 +560,13 @@ export default function ProjectsScreen() {
                 <View style={styles.projectHeader}>
                     <Text style={styles.projectName}>{item.name}</Text>
                     <Pressable
-                        onPress={() =>
+                        onPress={() => {
+                            Keyboard.dismiss();
                             setShowCompleted((prev) => ({
                                 ...prev,
                                 [item.id]: !isShowingCompleted,
-                            }))
-                        }
+                            }));
+                        }}
                         hitSlop={8}
                         accessibilityRole="button"
                         accessibilityState={{ selected: isShowingCompleted }}
@@ -450,58 +605,62 @@ export default function ProjectsScreen() {
 
                 <View style={styles.projectDivider} />
 
-                {visibleTasks.length > 0 ? (
-                    visibleTasks.map((task) => renderTask(item.id, task))
-                ) : (
-                    <Text style={styles.noTasks}>No tasks yet</Text>
-                )}
+                {visibleTasks.map((task) => renderTask(item.id, task))}
+
+                {renderAddTask(item.id)}
             </View>
         );
     };
 
     return (
         <SafeAreaView style={styles.container} edges={["top"]}>
-            <View style={styles.header}>
-                <Text style={styles.headerTitle}>Projects</Text>
-                {actionError ? (
-                    <Text style={styles.actionError}>{actionError}</Text>
-                ) : null}
-            </View>
+            <Pressable
+                style={styles.screen}
+                onPress={Keyboard.dismiss}
+                accessible={false}
+            >
+                <View style={styles.header}>
+                    <Text style={styles.headerTitle}>Projects</Text>
+                    {actionError ? (
+                        <Text style={styles.actionError}>{actionError}</Text>
+                    ) : null}
+                </View>
 
-            {loading ? (
-                <View style={styles.centered}>
-                    <ActivityIndicator color={theme.text} />
-                </View>
-            ) : error ? (
-                <View style={styles.centered}>
-                    <Text style={styles.emptyTitle}>Something went wrong</Text>
-                    <Text style={styles.emptySubtitle}>{error}</Text>
-                </View>
-            ) : (
-                <FlatList
-                    data={projects}
-                    keyExtractor={(project) => project.id}
-                    renderItem={renderProject}
-                    contentContainerStyle={styles.list}
-                    ItemSeparatorComponent={() => <View style={styles.projectGap} />}
-                    refreshControl={
-                        <RefreshControl
-                            refreshing={refreshing}
-                            onRefresh={() => void load("refresh")}
-                            tintColor={theme.text}
-                            colors={[theme.text]}
-                        />
-                    }
-                    ListEmptyComponent={
-                        <View style={styles.empty}>
-                            <Text style={styles.emptyTitle}>No Projects</Text>
-                            <Text style={styles.emptySubtitle}>
-                                Your projects will show up here.
-                            </Text>
-                        </View>
-                    }
-                />
-            )}
+                {loading ? (
+                    <View style={styles.centered}>
+                        <ActivityIndicator color={theme.text} />
+                    </View>
+                ) : error ? (
+                    <View style={styles.centered}>
+                        <Text style={styles.emptyTitle}>Something went wrong</Text>
+                        <Text style={styles.emptySubtitle}>{error}</Text>
+                    </View>
+                ) : (
+                    <FlatList
+                        data={projects}
+                        keyExtractor={(project) => project.id}
+                        renderItem={renderProject}
+                        contentContainerStyle={styles.list}
+                        ItemSeparatorComponent={() => <View style={styles.projectGap} />}
+                        refreshControl={
+                            <RefreshControl
+                                refreshing={refreshing}
+                                onRefresh={() => void load("refresh")}
+                                tintColor={theme.text}
+                                colors={[theme.text]}
+                            />
+                        }
+                        ListEmptyComponent={
+                            <View style={styles.empty}>
+                                <Text style={styles.emptyTitle}>No Projects</Text>
+                                <Text style={styles.emptySubtitle}>
+                                    Your projects will show up here.
+                                </Text>
+                            </View>
+                        }
+                    />
+                )}
+            </Pressable>
         </SafeAreaView>
     );
 }
@@ -511,6 +670,9 @@ const createStyles = (theme: Theme) =>
         container: {
             flex: 1,
             backgroundColor: theme.background,
+        },
+        screen: {
+            flex: 1,
         },
         header: {
             paddingHorizontal: 16,
@@ -672,8 +834,19 @@ const createStyles = (theme: Theme) =>
             fontWeight: "600",
             color: theme.sentBubble,
         },
-        noTasks: {
+        addTaskRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            marginTop: 2,
+            paddingVertical: 8,
+        },
+        addTaskRowPressed: {
+            opacity: 0.55,
+        },
+        addTaskLabel: {
             fontSize: 14,
+            fontWeight: "500",
             color: theme.placeholder,
         },
         centered: {

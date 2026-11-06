@@ -209,6 +209,27 @@ export async function fetchProjectTasks(projectId: string): Promise<Task[]> {
     return body.tasks ?? [];
 }
 
+export type CreateProjectTaskInput = {
+    name: string;
+    description?: string;
+};
+
+export async function createProjectTask(
+    projectId: string,
+    task: CreateProjectTaskInput,
+): Promise<Task> {
+    const body = await authorizedRequest<ProjectTaskResponse>(
+        `/projects/${encodeURIComponent(projectId)}/tasks`,
+        {
+            method: "POST",
+            body: JSON.stringify(task),
+        },
+    );
+
+    if (!body.task) throw new Error("POST /api/projects/{projectId}/tasks: missing task");
+    return body.task;
+}
+
 export type UpdateProjectTaskInput = {
     name?: string;
     description?: string;
