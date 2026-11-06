@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SymbolView } from "expo-symbols";
 import {
     ActivityIndicator,
     FlatList,
+    Pressable,
     RefreshControl,
     StyleSheet,
     Text,
+    TextInput,
     View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -13,9 +16,11 @@ import { useAuth } from "@/auth/AuthProvider";
 import {
     fetchProjectTasks,
     fetchProjects,
+    updateProjectTask,
     WingdApiError,
     type Project,
     type Task,
+    type UpdateProjectTaskInput,
 } from "@/lib/wingd";
 import { formatTaskDueDate, formatTaskRepeat } from "@/lib/taskSchedule";
 import { useTheme } from "@/theme/ThemeProvider";
@@ -25,10 +30,14 @@ type ProjectWithTasks = Project & {
     tasks: Task[];
 };
 
-function taskCountLabel(count: number): string {
-    if (count === 0) return "No tasks";
-    return count === 1 ? "1 task" : `${count} tasks`;
-}
+type TaskEditField = "name" | "description";
+
+type TaskEdit = {
+    projectId: string;
+    taskId: string;
+    field: TaskEditField;
+    value: string;
+};
 
 export default function ProjectsScreen() {
     const { theme } = useTheme();
@@ -39,6 +48,9 @@ export default function ProjectsScreen() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
+    const [editing, setEditing] = useState<TaskEdit | null>(null);
+    const [showCompleted, setShowCompleted] = useState<Record<string, boolean>>({});
     const mounted = useRef(true);
 
     useEffect(() => {
@@ -57,6 +69,7 @@ export default function ProjectsScreen() {
                 setLoading(true);
             }
             setError(null);
+            setActionError(null);
 
             try {
                 const nextProjects = await fetchProjects();
@@ -91,32 +104,253 @@ export default function ProjectsScreen() {
         void load();
     }, [load]);
 
-    const renderTask = (task: Task) => {
+    const patchTask = (
+        projectId: string,
+        taskId: string,
+        updates: Partial<Task>,
+    ) => {
+        setProjects((prev) =>
+            prev.map((project) =>
+                project.id !== projectId
+                    ? project
+                    : {
+                          ...project,
+                          tasks: project.tasks.map((task) =>
+                              task.id === taskId ? { ...task, ...updates } : task,
+                          ),
+                      },
+            ),
+        );
+    };
+
+    const beginEditing = (
+        projectId: string,
+        task: Task,
+        field: TaskEditField,
+    ) => {
+        setActionError(null);
+        setEditing({
+            projectId,
+            taskId: task.id,
+            field,
+            value: field === "name" ? task.name : task.description,
+        });
+    };
+
+    const stopEditing = (taskId: string, field: TaskEditField) => {
+        setEditing((prev) =>
+            prev && prev.taskId === taskId && prev.field === field ? null : prev,
+        );
+    };
+
+    const commitEditing = async (
+        projectId: string,
+        taskId: string,
+        field: TaskEditField,
+        rawValue: string,
+    ) => {
+        stopEditing(taskId, field);
+
+        const value = rawValue.trim();
+        const task = projects
+            .find((project) => project.id === projectId)
+            ?.tasks.find((candidate) => candidate.id === taskId);
+
+        if (!task) return;
+        // The API rejects an empty name; leave the previous one in place.
+        if (field === "name" && !value) return;
+        if (task[field] === value) return;
+
+        const previous = task[field];
+        patchTask(projectId, taskId, { [field]: value });
+        setActionError(null);
+
+        try {
+            const updated = await updateProjectTask(projectId, taskId, {
+                [field]: value,
+            } as UpdateProjectTaskInput);
+            // Only apply the field we changed: another request (such as
+            // completing the task) may have updated the row meanwhile.
+            patchTask(projectId, taskId, { [field]: updated[field] });
+        } catch (err) {
+            patchTask(projectId, taskId, { [field]: previous });
+
+            if (err instanceof WingdApiError && err.status === 401) {
+                await refreshSession();
+                return;
+            }
+
+            setActionError("Couldn't save your changes.");
+        }
+    };
+
+    const toggleTaskCompletion = async (projectId: string, task: Task) => {
+        const completed = !task.completed;
+
+        setActionError(null);
+        setEditing((prev) => (prev?.taskId === task.id ? null : prev));
+        patchTask(projectId, task.id, { completed });
+
+        try {
+            await updateProjectTask(projectId, task.id, { completed });
+        } catch (err) {
+            patchTask(projectId, task.id, { completed: task.completed });
+
+            if (err instanceof WingdApiError && err.status === 401) {
+                await refreshSession();
+                return;
+            }
+
+            setActionError(
+                completed
+                    ? "Couldn't complete the task."
+                    : "Couldn't reopen the task.",
+            );
+        }
+    };
+
+    const renderTask = (projectId: string, task: Task) => {
         const due = formatTaskDueDate(task.due_at, task.timezone);
         const repeat = formatTaskRepeat(task.rrule, task.repeat_until, task.timezone);
         const scheduleLabel = [due?.text, repeat?.text].filter(Boolean).join(", ");
+        const editingField =
+            editing && editing.taskId === task.id ? editing.field : null;
+        const editingValue =
+            editing && editing.taskId === task.id ? editing.value : "";
 
         return (
             <View
                 key={task.id}
-                style={styles.taskRow}
+                style={[styles.taskRow, task.completed && styles.taskRowCompleted]}
                 accessibilityLabel={`${task.name}${task.completed ? ", completed" : ""}${
                     scheduleLabel ? `, ${scheduleLabel}` : ""
                 }`}
             >
-                <View
-                    style={[styles.taskCheck, task.completed && styles.taskCheckCompleted]}
+                <Pressable
+                    onPress={() => void toggleTaskCompletion(projectId, task)}
+                    hitSlop={8}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: task.completed }}
+                    accessibilityLabel={
+                        task.completed
+                            ? `Mark ${task.name} as not completed`
+                            : `Complete ${task.name}`
+                    }
+                    style={({ pressed }) => [
+                        styles.taskCheck,
+                        task.completed && styles.taskCheckCompleted,
+                        pressed && styles.taskCheckPressed,
+                    ]}
                 >
-                    {task.completed ? <Text style={styles.taskCheckMark}>✓</Text> : null}
-                </View>
+                    {task.completed ? (
+                        <Text style={styles.taskCheckMark}>✓</Text>
+                    ) : null}
+                </Pressable>
                 <View style={styles.taskContent}>
-                    <Text
-                        style={[styles.taskName, task.completed && styles.taskNameCompleted]}
-                    >
-                        {task.name}
-                    </Text>
-                    {task.description ? (
-                        <Text style={styles.taskDescription}>{task.description}</Text>
+                    {editingField === "name" ? (
+                        <TextInput
+                            value={editingValue}
+                            onChangeText={(value) =>
+                                setEditing((prev) =>
+                                    prev &&
+                                    prev.taskId === task.id &&
+                                    prev.field === "name"
+                                        ? { ...prev, value }
+                                        : prev,
+                                )
+                            }
+                            autoFocus
+                            selectTextOnFocus
+                            returnKeyType="done"
+                            style={[styles.taskName, styles.taskNameInput]}
+                            onBlur={() =>
+                                void commitEditing(
+                                    projectId,
+                                    task.id,
+                                    "name",
+                                    editingValue,
+                                )
+                            }
+                            accessibilityLabel="Task title"
+                        />
+                    ) : (
+                        <Pressable
+                            onPress={() => beginEditing(projectId, task, "name")}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Edit title of ${task.name}`}
+                        >
+                            <Text
+                                style={[
+                                    styles.taskName,
+                                    task.completed && styles.taskNameCompleted,
+                                ]}
+                            >
+                                {task.name}
+                            </Text>
+                        </Pressable>
+                    )}
+
+                    {editingField === "description" ? (
+                        <TextInput
+                            value={editingValue}
+                            onChangeText={(value) =>
+                                setEditing((prev) =>
+                                    prev &&
+                                    prev.taskId === task.id &&
+                                    prev.field === "description"
+                                        ? { ...prev, value }
+                                        : prev,
+                                )
+                            }
+                            autoFocus
+                            multiline
+                            returnKeyType="done"
+                            submitBehavior="blurAndSubmit"
+                            placeholder="Add description"
+                            placeholderTextColor={theme.placeholder}
+                            style={[
+                                styles.taskDescription,
+                                styles.taskDescriptionInput,
+                            ]}
+                            onBlur={() =>
+                                void commitEditing(
+                                    projectId,
+                                    task.id,
+                                    "description",
+                                    editingValue,
+                                )
+                            }
+                            accessibilityLabel="Task description"
+                        />
+                    ) : task.description ? (
+                        <Pressable
+                            onPress={() =>
+                                beginEditing(projectId, task, "description")
+                            }
+                            accessibilityRole="button"
+                            accessibilityLabel={`Edit description of ${task.name}`}
+                        >
+                            <Text style={styles.taskDescription}>
+                                {task.description}
+                            </Text>
+                        </Pressable>
+                    ) : editingField ? (
+                        <Pressable
+                            onPress={() =>
+                                beginEditing(projectId, task, "description")
+                            }
+                            accessibilityRole="button"
+                            accessibilityLabel={`Add description to ${task.name}`}
+                        >
+                            <Text
+                                style={[
+                                    styles.taskDescription,
+                                    styles.taskDescriptionPlaceholder,
+                                ]}
+                            >
+                                Add description
+                            </Text>
+                        </Pressable>
                     ) : null}
                     {due || repeat ? (
                         <View style={styles.taskMeta}>
@@ -159,31 +393,79 @@ export default function ProjectsScreen() {
         );
     };
 
-    const renderProject = ({ item }: { item: ProjectWithTasks }) => (
-        <View style={styles.projectCard}>
-            <View style={styles.projectHeader}>
-                <Text style={styles.projectName}>{item.name}</Text>
-                <Text style={styles.taskCount}>{taskCountLabel(item.tasks.length)}</Text>
+    const renderProject = ({ item }: { item: ProjectWithTasks }) => {
+        const activeTasks = item.tasks.filter((task) => !task.completed);
+        const completedTasks = item.tasks.filter((task) => task.completed);
+        const isShowingCompleted = showCompleted[item.id] ?? false;
+        const visibleTasks = isShowingCompleted
+            ? [...activeTasks, ...completedTasks]
+            : activeTasks;
+
+        return (
+            <View style={styles.projectCard}>
+                <View style={styles.projectHeader}>
+                    <Text style={styles.projectName}>{item.name}</Text>
+                    <Pressable
+                        onPress={() =>
+                            setShowCompleted((prev) => ({
+                                ...prev,
+                                [item.id]: !isShowingCompleted,
+                            }))
+                        }
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: isShowingCompleted }}
+                        accessibilityLabel={
+                            isShowingCompleted
+                                ? `Hide completed tasks in ${item.name}`
+                                : `Show completed tasks in ${item.name}`
+                        }
+                        style={({ pressed }) => [
+                            styles.completedToggle,
+                            isShowingCompleted && styles.completedToggleActive,
+                            pressed && styles.completedTogglePressed,
+                        ]}
+                    >
+                        <SymbolView
+                            name={{
+                                ios: isShowingCompleted ? "eye" : "eye.slash",
+                                android: isShowingCompleted
+                                    ? "visibility"
+                                    : "visibility_off",
+                                web: isShowingCompleted
+                                    ? "visibility"
+                                    : "visibility_off",
+                            }}
+                            size={18}
+                            tintColor={
+                                isShowingCompleted ? theme.text : theme.placeholder
+                            }
+                        />
+                    </Pressable>
+                </View>
+
+                {item.description ? (
+                    <Text style={styles.projectDescription}>{item.description}</Text>
+                ) : null}
+
+                <View style={styles.projectDivider} />
+
+                {visibleTasks.length > 0 ? (
+                    visibleTasks.map((task) => renderTask(item.id, task))
+                ) : (
+                    <Text style={styles.noTasks}>No tasks yet</Text>
+                )}
             </View>
-
-            {item.description ? (
-                <Text style={styles.projectDescription}>{item.description}</Text>
-            ) : null}
-
-            <View style={styles.projectDivider} />
-
-            {item.tasks.length > 0 ? (
-                item.tasks.map(renderTask)
-            ) : (
-                <Text style={styles.noTasks}>No tasks yet</Text>
-            )}
-        </View>
-    );
+        );
+    };
 
     return (
         <SafeAreaView style={styles.container} edges={["top"]}>
             <View style={styles.header}>
                 <Text style={styles.headerTitle}>Projects</Text>
+                {actionError ? (
+                    <Text style={styles.actionError}>{actionError}</Text>
+                ) : null}
             </View>
 
             {loading ? (
@@ -240,6 +522,12 @@ const createStyles = (theme: Theme) =>
             letterSpacing: -0.6,
             color: theme.text,
         },
+        actionError: {
+            marginTop: 4,
+            fontSize: 13,
+            lineHeight: 18,
+            color: theme.error,
+        },
         list: {
             flexGrow: 1,
             paddingHorizontal: 16,
@@ -265,10 +553,16 @@ const createStyles = (theme: Theme) =>
             fontWeight: "700",
             color: theme.text,
         },
-        taskCount: {
-            marginTop: 2,
-            fontSize: 13,
-            color: theme.placeholder,
+        completedToggle: {
+            marginTop: 1,
+            padding: 4,
+            borderRadius: 8,
+        },
+        completedToggleActive: {
+            backgroundColor: theme.background,
+        },
+        completedTogglePressed: {
+            opacity: 0.55,
         },
         projectDescription: {
             marginTop: 6,
@@ -287,6 +581,9 @@ const createStyles = (theme: Theme) =>
             gap: 10,
             paddingVertical: 6,
         },
+        taskRowCompleted: {
+            opacity: 0.6,
+        },
         taskCheck: {
             width: 18,
             height: 18,
@@ -300,6 +597,9 @@ const createStyles = (theme: Theme) =>
         taskCheckCompleted: {
             borderColor: theme.sentBubble,
             backgroundColor: theme.sentBubble,
+        },
+        taskCheckPressed: {
+            opacity: 0.55,
         },
         taskCheckMark: {
             fontSize: 11,
@@ -321,11 +621,26 @@ const createStyles = (theme: Theme) =>
             color: theme.placeholder,
             textDecorationLine: "line-through",
         },
+        taskNameInput: {
+            paddingHorizontal: 0,
+            paddingVertical: 0,
+            minHeight: 20,
+        },
         taskDescription: {
             marginTop: 2,
             fontSize: 14,
             lineHeight: 19,
             color: theme.placeholder,
+        },
+        taskDescriptionInput: {
+            paddingHorizontal: 0,
+            paddingVertical: 0,
+            minHeight: 19,
+            maxHeight: 140,
+            textAlignVertical: "top",
+        },
+        taskDescriptionPlaceholder: {
+            fontStyle: "italic",
         },
         taskMeta: {
             marginTop: 7,

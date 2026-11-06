@@ -99,6 +99,10 @@ type ProjectTasksResponse = {
     tasks: Task[];
 };
 
+type ProjectTaskResponse = {
+    task: Task;
+};
+
 type SendChatMessageResponse = {
     message: Message;
 };
@@ -203,6 +207,29 @@ export async function fetchProjectTasks(projectId: string): Promise<Task[]> {
         `/projects/${encodeURIComponent(projectId)}/tasks`,
     );
     return body.tasks ?? [];
+}
+
+export type UpdateProjectTaskInput = {
+    name?: string;
+    description?: string;
+    completed?: boolean;
+};
+
+export async function updateProjectTask(
+    projectId: string,
+    taskId: string,
+    updates: UpdateProjectTaskInput,
+): Promise<Task> {
+    const body = await authorizedRequest<ProjectTaskResponse>(
+        `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`,
+        {
+            method: "PATCH",
+            body: JSON.stringify(updates),
+        },
+    );
+
+    if (!body.task) throw new Error("PATCH /api/projects/{projectId}/tasks/{taskId}: missing task");
+    return body.task;
 }
 
 async function authorizedRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
