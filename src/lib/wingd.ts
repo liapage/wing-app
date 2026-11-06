@@ -44,6 +44,26 @@ export type Chat = {
     members: ChatMember[];
 };
 
+export type Project = {
+    id: string;
+    user_id: string;
+    name: string;
+    description: string;
+};
+
+export type Task = {
+    id: string;
+    project_id: string;
+    assigned_user_id: string;
+    name: string;
+    description: string;
+    completed: boolean;
+    due_at?: string | null;
+    timezone?: string;
+    rrule?: string;
+    repeat_until?: string | null;
+};
+
 export type Message = {
     id: string;
     chat_id: string;
@@ -69,6 +89,14 @@ type ChatsResponse = {
 type ChatMessagesResponse = {
     messages: Message[];
     has_more: boolean;
+};
+
+type ProjectsResponse = {
+    projects: Project[];
+};
+
+type ProjectTasksResponse = {
+    tasks: Task[];
 };
 
 type SendChatMessageResponse = {
@@ -163,6 +191,18 @@ export async function fetchMe(): Promise<Me | null> {
 export async function fetchChats(): Promise<Chat[]> {
     const body = await authorizedRequest<ChatsResponse>("/chats/me");
     return body.chats ?? [];
+}
+
+export async function fetchProjects(): Promise<Project[]> {
+    const body = await authorizedRequest<ProjectsResponse>("/projects/me");
+    return body.projects ?? [];
+}
+
+export async function fetchProjectTasks(projectId: string): Promise<Task[]> {
+    const body = await authorizedRequest<ProjectTasksResponse>(
+        `/projects/${encodeURIComponent(projectId)}/tasks`,
+    );
+    return body.tasks ?? [];
 }
 
 async function authorizedRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
