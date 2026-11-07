@@ -614,53 +614,47 @@ export default function ProjectsScreen() {
 
     return (
         <SafeAreaView style={styles.container} edges={["top"]}>
-            <Pressable
-                style={styles.screen}
-                onPress={Keyboard.dismiss}
-                accessible={false}
-            >
-                <View style={styles.header}>
-                    <Text style={styles.headerTitle}>Projects</Text>
-                    {actionError ? (
-                        <Text style={styles.actionError}>{actionError}</Text>
-                    ) : null}
-                </View>
+            <View style={styles.header}>
+                <Text style={styles.headerTitle}>Projects</Text>
+                {actionError ? (
+                    <Text style={styles.actionError}>{actionError}</Text>
+                ) : null}
+            </View>
 
-                {loading ? (
-                    <View style={styles.centered}>
-                        <ActivityIndicator color={theme.text} />
-                    </View>
-                ) : error ? (
-                    <View style={styles.centered}>
-                        <Text style={styles.emptyTitle}>Something went wrong</Text>
-                        <Text style={styles.emptySubtitle}>{error}</Text>
-                    </View>
-                ) : (
-                    <FlatList
-                        data={projects}
-                        keyExtractor={(project) => project.id}
-                        renderItem={renderProject}
-                        contentContainerStyle={styles.list}
-                        ItemSeparatorComponent={() => <View style={styles.projectGap} />}
-                        refreshControl={
-                            <RefreshControl
-                                refreshing={refreshing}
-                                onRefresh={() => void load("refresh")}
-                                tintColor={theme.text}
-                                colors={[theme.text]}
-                            />
-                        }
-                        ListEmptyComponent={
-                            <View style={styles.empty}>
-                                <Text style={styles.emptyTitle}>No Projects</Text>
-                                <Text style={styles.emptySubtitle}>
-                                    Your projects will show up here.
-                                </Text>
-                            </View>
-                        }
-                    />
-                )}
-            </Pressable>
+            {loading ? (
+                <View style={styles.centered}>
+                    <ActivityIndicator color={theme.text} />
+                </View>
+            ) : error ? (
+                <View style={styles.centered}>
+                    <Text style={styles.emptyTitle}>Something went wrong</Text>
+                    <Text style={styles.emptySubtitle}>{error}</Text>
+                </View>
+            ) : (
+                <FlatList
+                    data={projects}
+                    keyExtractor={(project) => project.id}
+                    renderItem={renderProject}
+                    contentContainerStyle={styles.list}
+                    ItemSeparatorComponent={() => <View style={styles.projectGap} />}
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={refreshing}
+                            onRefresh={() => void load("refresh")}
+                            tintColor={theme.text}
+                            colors={[theme.text]}
+                        />
+                    }
+                    ListEmptyComponent={
+                        <View style={styles.empty}>
+                            <Text style={styles.emptyTitle}>No Projects</Text>
+                            <Text style={styles.emptySubtitle}>
+                                Your projects will show up here.
+                            </Text>
+                        </View>
+                    }
+                />
+            )}
         </SafeAreaView>
     );
 }
