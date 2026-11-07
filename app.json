@@ -8,11 +8,20 @@
     "scheme": "wing",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "page.lia.wing",
+      "entitlements": {
+        "aps-environment": "development"
+      },
+      "googleServicesFile": "./.secrets/GoogleService-Info.plist"
     },
     "android": {
       "package": "page.lia.wing",
       "versionCode": 1,
+      "googleServicesFile": "./.secrets/google-services.json",
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -27,6 +36,13 @@
     },
     "plugins": [
       "expo-router",
+      "@react-native-firebase/app",
+      [
+        "@react-native-firebase/messaging",
+        {
+          "installationIdEnabled": true
+        }
+      ],
       [
         "expo-splash-screen",
         {

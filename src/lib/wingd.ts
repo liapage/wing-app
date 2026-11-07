@@ -78,8 +78,30 @@ export type ChatMessagesPage = {
     hasMore: boolean;
 };
 
+// wingd derives the push target from the session row; an empty string means the
+// device has not registered yet.
+export type SessionInfo = {
+    id: string;
+    fid: string | null;
+    created_at: string;
+    expires_at: string;
+};
+
+export type CurrentSession = {
+    user: Me;
+    session: SessionInfo | null;
+};
+
+type SessionPayload = {
+    id?: string;
+    fid?: string | null;
+    created_at?: string;
+    expires_at?: string;
+};
+
 type MeResponse = {
     user: Me;
+    session?: SessionPayload;
 };
 
 type ChatsResponse = {
@@ -171,7 +193,7 @@ export async function clearToken(): Promise<void> {
     await SecureStore.deleteItemAsync(tokenKey);
 }
 
-export async function fetchMe(): Promise<Me | null> {
+export async function fetchMe(): Promise<CurrentSession | null> {
     const token = await readToken();
     if (!token) return null;
 
@@ -189,7 +211,20 @@ export async function fetchMe(): Promise<Me | null> {
     if (!response.ok) throw new Error(`GET /api/me: ${response.status}`);
 
     const body = (await response.json()) as MeResponse;
-    return body.user;
+    const session = body.session;
+
+    return {
+        user: body.user,
+        session:
+            session?.id && session.created_at && session.expires_at
+                ? {
+                      id: session.id,
+                      fid: session.fid ? session.fid : null,
+                      created_at: session.created_at,
+                      expires_at: session.expires_at,
+                  }
+                : null,
+    };
 }
 
 export async function fetchChats(): Promise<Chat[]> {
@@ -253,7 +288,7 @@ export async function updateProjectTask(
     return body.task;
 }
 
-async function authorizedRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function authorizedFetch(path: string, init: RequestInit = {}): Promise<Response> {
     const token = await readToken();
     if (!token) throw new WingdApiError(path, 401);
 
@@ -272,7 +307,26 @@ async function authorizedRequest<T>(path: string, init: RequestInit = {}): Promi
     }
     if (!response.ok) throw new WingdApiError(path, response.status);
 
+    return response;
+}
+
+async function authorizedRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const response = await authorizedFetch(path, init);
     return (await response.json()) as T;
+}
+
+// Upserts the Firebase Installation ID (FID) onto the current session so wingd
+// can address push notifications to this device.
+export async function registerInstallationId(fid: string): Promise<void> {
+    await authorizedFetch("/sessions/current/fid", {
+        method: "PUT",
+        body: JSON.stringify({ fid }),
+    });
+}
+
+// Drops the FID from the current session; call before ending the session.
+export async function clearInstallationId(): Promise<void> {
+    await authorizedFetch("/sessions/current/fid", { method: "DELETE" });
 }
 
 export async function fetchChatMessages(

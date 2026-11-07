@@ -2,6 +2,7 @@ import { Stack } from "expo-router";
 
 import { AuthProvider } from "@/auth/AuthProvider";
 import { MessagingProvider } from "@/messaging/MessagingProvider";
+import { PushRegistration } from "@/push/PushRegistration";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
 export default function RootLayout() {
@@ -9,6 +10,7 @@ export default function RootLayout() {
         <ThemeProvider>
             <AuthProvider>
                 <MessagingProvider>
+                    <PushRegistration />
                     <Stack screenOptions={{ headerShown: false }} />
                 </MessagingProvider>
             </AuthProvider>

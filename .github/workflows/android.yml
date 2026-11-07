@@ -60,8 +60,6 @@ jobs:
         env:
           WING_KEYSTORE_BASE64: ${{ secrets.WING_KEYSTORE_BASE64 }}
           WING_KEYSTORE_PASSWORD: ${{ secrets.WING_KEYSTORE_PASSWORD }}
-          WING_KEY_ALIAS: ${{ secrets.WING_KEY_ALIAS }}
-          WING_KEY_PASSWORD: ${{ secrets.WING_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           if [ -z "$WING_KEYSTORE_BASE64" ] || [ -z "$WING_KEYSTORE_PASSWORD" ]; then
@@ -72,15 +70,25 @@ jobs:
           mkdir -p .secrets
           printf '%s' "$WING_KEYSTORE_BASE64" | base64 -d > .secrets/wing-release.keystore
 
-          key_alias="${WING_KEY_ALIAS:-wing}"
-          key_password="${WING_KEY_PASSWORD:-$WING_KEYSTORE_PASSWORD}"
           {
             echo "storeFile=.secrets/wing-release.keystore"
             echo "storePassword=$WING_KEYSTORE_PASSWORD"
-            echo "keyAlias=$key_alias"
-            echo "keyPassword=$key_password"
+            echo "keyAlias=wing"
+            echo "keyPassword=$WING_KEYSTORE_PASSWORD"
           } > .secrets/keystore.properties
           chmod 600 .secrets/wing-release.keystore .secrets/keystore.properties
+
+      - name: Configure Firebase
+        env:
+          WING_GOOGLE_SERVICES_JSON: ${{ secrets.WING_GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WING_GOOGLE_SERVICES_JSON" ]; then
+            echo "::error::Add the WING_GOOGLE_SERVICES_JSON repository secret (contents of google-services.json, see README)."
+            exit 1
+          fi
+          mkdir -p .secrets
+          printf '%s' "$WING_GOOGLE_SERVICES_JSON" > .secrets/google-services.json
 
       - name: Build signed APK
         run: |

@@ -32,6 +32,60 @@ Expo Go cannot complete this flow because its redirect URI uses the `exp://` sch
 
 The web build also calls wingd from the browser, so wingd must allow that origin through CORS.
 
+## Push notifications (Firebase Installation ID)
+
+Push uses [React Native Firebase](https://rnfirebase.io) in **Installation ID** mode: the device
+registers its Firebase Installation ID (FID) and wingd sends to that, instead of to an FCM token.
+The IDs are stored on the session row (`sessions.fid`). `GET /api/me` now returns that session
+alongside the user, so the app knows which FID wingd already has and skips a redundant upload at
+startup; the upsert itself is `PUT /api/sessions/current/fid`.
+`expo-notifications` is deliberately not used — it produces Expo/native push tokens and its Android
+push service conflicts with RNFirebase's.
+
+Setup:
+
+1. Create **one Firebase app per platform** in the same Firebase project. The identifiers must match
+   what `app.json` builds, or `google-services.json` / `GoogleService-Info.plist` are silently wrong:
+
+   | Platform | Identifier | Where |
+   | --- | --- | --- |
+   | Android | `page.lia.wing` | `expo.android.package` |
+   | iOS | `page.lia.wing` | `expo.ios.bundleIdentifier` |
+
+   A package mismatch fails late: Android at `processDebugGoogleServices` ("No matching client
+   found"), iOS at launch.
+
+2. Put the downloaded files in `.secrets/` (gitignored, next to the release keystore):
+   - `.secrets/google-services.json` (Android)
+   - `.secrets/GoogleService-Info.plist` (iOS)
+
+3. iOS credentials (paid Apple Developer account required):
+   - Create an **APNs auth key** (`.p8`) in the Apple Developer portal and upload it under Firebase
+     → Project settings → Cloud Messaging → Apple app configuration.
+   - `app.json` already writes the **Push Notifications** entitlement
+     (`ios.entitlements.aps-environment = "development"`) and prebuild wires it into the Xcode
+     project, so `expo run:ios` with automatic signing enables the capability on the App ID.
+     For App Store / TestFlight builds, use `"production"` (or let EAS manage the entitlement).
+   - iOS 16+ Simulators on Xcode 14+ can receive push, but a physical device is the reliable path.
+
+4. Rebuild the native project — the FID flag is a native setting:
+   ```bash
+   npx expo prebuild --clean
+   npx expo run:android    # or: npx expo run:ios, or scripts/build-android.sh
+   ```
+   `app.json` opts in with `["@react-native-firebase/messaging", { "installationIdEnabled": true }]`,
+   which prebuild turns into Android meta-data `firebase_messaging_installation_id_enabled` and the
+   iOS Info.plist key `FirebaseMessagingInstallationIdEnabled`. With that flag off,
+   `register`/`onRegistered` throw `messaging/installation-id-not-enabled`.
+
+5. Expo Go will not work; use a development build.
+
+Runtime wiring: `src/push/PushRegistration.tsx` (mounted in the root layout) calls
+`startPushRegistration()` once the session is authenticated. The `onRegistered` listener fires after
+each `register()`, on FID rotation, and on push-subscription changes, and every event upserts the FID
+onto the current session. `signOut()` in `AuthProvider` calls `unregister()` and clears the FID
+server-side before dropping the token.
+
 ## Personal Android APK
 
 Build a signed release APK that talks to `https://wing.lia.page`:
@@ -56,8 +110,7 @@ Add these repository secrets under **Settings → Secrets and variables → Acti
 | --- | --- |
 | `WING_KEYSTORE_BASE64` | Output of `base64 -i .secrets/wing-release.keystore` (one line) |
 | `WING_KEYSTORE_PASSWORD` | `storePassword` from `.secrets/keystore.properties` |
-| `WING_KEY_ALIAS` | `wing` (optional, defaults to `wing`) |
-| `WING_KEY_PASSWORD` | `keyPassword` from `.secrets/keystore.properties` (optional, defaults to the store password) |
+| `WING_GOOGLE_SERVICES_JSON` | Full contents of `google-services.json` for `page.lia.wing` |
 
 The workflow reads `.env.production`, fails early if signing secrets are missing, and verifies the APK is signed and contains the production Discord client ID before uploading it.
 
